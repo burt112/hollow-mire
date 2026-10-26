@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Hollow Mire</title>
+<style>
+*{box-sizing:border-box;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
+html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:monospace;color:#bbb;touch-action:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;image-rendering:pixelated}
+.stick{position:fixed;bottom:max(24px,env(safe-area-inset-bottom));width:140px;height:140px;border-radius:50%;border:2px solid #fff3;background:#ffffff0d;touch-action:none}
+.stick i{position:absolute;left:50%;top:50%;width:56px;height:56px;border-radius:50%;background:#fff4;transform:translate(-50%,-50%)}
+#L{left:24px}#R{right:24px}
+#use{position:fixed;right:40px;bottom:190px;width:84px;height:84px;border-radius:50%;border:2px solid #fff5;background:#0008;color:#fff;font:bold 13px monospace;touch-action:none}
+#use.on{border-color:#4fd1ff;box-shadow:0 0 16px #4fd1ff88}
+#hud{position:fixed;top:10px;left:12px;font-size:13px;text-shadow:0 0 4px #000;pointer-events:none}
+#menu{position:fixed;inset:0;background:#000d;display:flex;flex-direction:column;gap:12px;align-items:center;justify-content:center;z-index:9}
+#menu h1{color:#a22;letter-spacing:6px;margin:0 0 8px}
+#menu button,#menu input{font:16px monospace;padding:12px 18px;background:#111;color:#ddd;border:1px solid #555;width:240px;text-align:center;user-select:text;-webkit-user-select:text}
+#menu button:active{background:#400}
+#msg{color:#c55;min-height:18px}
+</style></head><body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<div class="stick" id="L"><i></i></div>
+<div class="stick" id="R"><i></i></div>
+<button id="use">POWER</button>
+<div id="menu">
+  <h1>HOLLOW MIRE</h1>
+  <input id="name" placeholder="your name" maxlength="12">
+  <button id="solo">Single player</button>
+  <button id="create">Create room</button>
+  <input id="code" placeholder="room code" maxlength="8" style="text-transform:uppercase">
+  <button id="join">Join room</button>
+  <div id="msg"></div>
+</div>
+<script type="module">
+import { T, W, H, hash, createWorld, newState, addPlayer, step } from './sim.js';
+const $ = (id) => document.getElementById(id);
+const cv = $('c'), ctx = cv.getContext('2d'), dk = document.createElement('canvas'), dctx = dk.getContext('2d');
+let VW = 320; const VH = 180;
+function resize() { VW = Math.round(VH * innerWidth / innerHeight); cv.width = dk.width = VW; cv.height = dk.height = VH; }
+addEventListener('resize', resize); resize();
+
+// ---------- input ----------
+function Stick(el) {
+  const knob = el.firstElementChild, v = { x: 0, y: 0 }; let pid = null; const R = 50;
+  const mv = (e) => { const r = el.getBoundingClientRect(); let dx = e.clientX - r.left - r.width / 2, dy = e.clientY - r.top - r.height / 2; const l = Math.hypot(dx, dy); if (l > R) { dx = dx / l * R; dy = dy / l * R; } v.x = dx / R; v.y = dy / R; knob.style.transform = `translate(calc(-50% + ${dx}px),calc(-50% + ${dy}px))`; };
+  const end = (e) => { if (e.pointerId === pid) { pid = null; v.x = v.y = 0; knob.style.transform = 'translate(-50%,-50%)'; } };
+  el.addEventListener('pointerdown', (e) => { pid = e.pointerId; el.setPointerCapture(pid); mv(e); });
+  el.addEventListener('pointermove', (e) => { if (e.pointerId === pid) mv(e); });
+  el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
+  return v;
+}
+const SL = Stick($('L')), SR = Stick($('R'));
+const keys = {}; let mouse = null, useQ = false;
+addEventListener('keydown', (e) => { keys[e.code] = 1; if (e.code === 'Space' || e.code === 'KeyE') useQ = true; });
+addEventListener('keyup', (e) => { keys[e.code] = 0; });
+addEventListener('mousemove', (e) => { mouse = { x: e.clientX - innerWidth / 2, y: e.clientY - innerHeight / 2 }; });
+$('use').addEventListener('pointerdown', (e) => { e.preventDefault(); useQ = true; });
+function readInput() {
+  let mx = SL.x, my = SL.y;
+  if (keys.KeyA || keys.ArrowLeft) mx -= 1; if (keys.KeyD || keys.ArrowRight) mx += 1;
+  if (keys.KeyW || keys.ArrowUp) my -= 1; if (keys.KeyS || keys.ArrowDown) my += 1;
+  let ax = SR.x, ay = SR.y;
+  if (Math.hypot(ax, ay) < 0.2 && mouse) { const l = Math.hypot(mouse.x, mouse.y) || 1; ax = mouse.x / l; ay = mouse.y / l; }
+  return { mx, my, ax, ay, u: useQ };
+}
+
+// ---------- audio ----------
+let ac, hbT = 0;
+function audio() { if (ac) return; const AC = window.AudioContext || window.webkitAudioContext; ac = new AC(); ac.resume(); const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = 42; g.gain.value = 0.05; o.connect(g).connect(ac.destination); o.start(); }
+function noise(dur, vol, f0, f1) {
+  if (!ac) return; const n = ac.sampleRate * dur, b = ac.createBuffer(1, n, ac.sampleRate), d = b.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+  const s = ac.createBufferSource(), g = ac.createGain(), f = ac.createBiquadFilter(); s.buffer = b; f.type = 'bandpass';
+  f.frequency.setValueAtTime(f0, ac.currentTime); f.frequency.exponentialRampToValueAtTime(f1, ac.currentTime + dur);
+  g.gain.value = vol; s.connect(f).connect(g).connect(ac.destination); s.start();
+}
+const thump = (v) => { if (!ac) return; const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = 55; g.gain.setValueAtTime(v, ac.currentTime); g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.25); o.connect(g).connect(ac.destination); o.start(); o.stop(ac.currentTime + 0.3); };
+
+// ---------- game state ----------
+let world, local = null, ws = null, me = null, room = '';
+const view = { players: {}, m: { x: 0, y: 0 }, k: [] };
+let scare = { t: 0, big: 0 }, caught = 0;
+
+function onEvents(evs) {
+  for (const e of evs) {
+    if (e.id !== me) continue;
+    if (e.k === 'scare') { scare = { t: e.big ? 0.9 : 0.35, big: e.big, max: e.big ? 0.9 : 0.35 }; noise(e.big ? 0.8 : 0.3, e.big ? 0.7 : 0.25, 3000, 400); if (navigator.vibrate) navigator.vibrate(e.big ? 200 : 60); }
+    if (e.k === 'caught') { caught = 3; scare = { t: 1.2, big: 1, max: 1.2 }; noise(1.2, 0.9, 5000, 200); }
+    if (e.k === 'pick') noise(0.15, 0.2, 1500, 3000);
+    if (e.k === 'use') noise(0.2, 0.25, 800, 2500);
+  }
+}
+function setPlayer(id, x, y, aim, item, dead, fx, name, snap) {
+  const p = view.players[id] || (view.players[id] = { x, y });
+  p.tx = x; p.ty = y; p.aim = aim; p.item = item; p.dead = dead; p.fx = fx; p.name = name;
+  if (snap) { p.x = x; p.y = y; }
+}
+function syncLocal() {
+  const s = local;
+  for (const p of Object.values(s.players)) setPlayer(p.id, p.x, p.y, p.aim, p.item, p.dead > 0, p.speedT > 0, p.name, true);
+  view.m.x = s.m.x; view.m.y = s.m.y; view.k = s.pk.map((k) => k.on);
+}
+
+function startSolo() {
+  world = createWorld((Math.random() * 2 ** 31) | 0); local = newState(world); me = 'me'; room = '';
+  addPlayer(local, world, me, $('name').value || 'You'); $('menu').style.display = 'none'; audio();
+}
+function startOnline(code) {
+  audio(); $('msg').textContent = 'connecting…'; room = code.toUpperCase();
+  const sock = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/${room}?name=${encodeURIComponent($('name').value || 'Player')}`);
+  sock.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.t === 'welcome') { me = m.id; world = createWorld(m.seed); ws = sock; $('menu').style.display = 'none'; }
+    else if (m.t === 's') {
+      const ids = new Set();
+      for (const [id, x, y, aim, item, dead, fx, name] of m.p) { ids.add(id); setPlayer(id, x, y, aim, item, !!dead, !!fx, name, !view.players[id]); }
+      for (const id in view.players) if (!ids.has(id)) delete view.players[id];
+      view.m.tx = m.m[0]; view.m.ty = m.m[1]; if (view.m.x === 0) { view.m.x = m.m[0]; view.m.y = m.m[1]; }
+      view.k = m.k.map(Boolean); onEvents(m.e);
+    }
+  };
+  sock.onclose = () => { ws = null; world = null; $('menu').style.display = 'flex'; $('msg').textContent = 'Disconnected or room full.'; };
+}
+$('solo').onclick = startSolo;
+$('create').onclick = async () => { const { code } = await (await fetch('/api/new')).json(); startOnline(code); };
+$('join').onclick = () => { const c = $('code').value.trim(); if (c) startOnline(c); };
+setInterval(() => { if (ws && ws.readyState === 1) { const i = readInput(); ws.send(JSON.stringify({ t: 'in', ...i })); useQ = false; } }, 50);
+
+// ---------- rendering ----------
+const COL = { dash: '#4fd1ff', speed: '#ffd84f' };
+function drawTile(t, tx, ty, sx, sy, time) {
+  const h = hash(tx, ty, 5);
+  ctx.fillStyle = h < 0.15 ? '#1f4022' : '#17301a';
+  if (t === 0 || t === 1) { ctx.fillRect(sx, sy, T, T); }
+  if (t === 1) { ctx.fillStyle = '#2b1d12'; ctx.fillRect(sx + 6, sy + 9, 4, 7); ctx.fillStyle = '#0c2410'; ctx.fillRect(sx + 1, sy, 14, 11); ctx.fillStyle = '#143a1c'; ctx.fillRect(sx + 3, sy + 2, 7, 4); }
+  else if (t === 2) { ctx.fillStyle = '#0e2238'; ctx.fillRect(sx, sy, T, T); if (((h * 100 + time * 2) | 0) % 9 === 0) { ctx.fillStyle = '#1b3d5e'; ctx.fillRect(sx + 3, sy + 7, 8, 1); } }
+  else if (t === 3) { ctx.fillStyle = '#3b2e22'; ctx.fillRect(sx, sy, T, T); ctx.fillStyle = '#31251a'; ctx.fillRect(sx, sy + 7, T, 1); }
+  else if (t === 4) { ctx.fillStyle = '#22222b'; ctx.fillRect(sx, sy, T, T); ctx.fillStyle = '#3a3a48'; ctx.fillRect(sx, sy, T, 3); }
+  else if (t === 5) { ctx.fillStyle = '#6b4a2a'; ctx.fillRect(sx, sy, T, T); ctx.fillStyle = '#3b2814'; ctx.fillRect(sx + 2, sy + 2, 12, 12); }
+}
+function drawScare() {
+  if (scare.t <= 0) return;
+  const k = scare.t / scare.max, sh = scare.big ? 6 : 2;
+  ctx.fillStyle = `rgba(160,0,0,${0.5 * k})`; ctx.fillRect(0, 0, VW, VH);
+  if (!scare.big) return;
+  const cx = VW / 2 + (Math.random() - 0.5) * sh, cy = VH / 2 + (Math.random() - 0.5) * sh, s = 1 + (1 - k) * 0.6;
+  ctx.save(); ctx.translate(cx, cy); ctx.scale(s, s);
+  ctx.fillStyle = '#d8d2c0'; ctx.fillRect(-40, -55, 80, 110); ctx.fillStyle = '#000';
+  ctx.fillRect(-30, -30, 22, 28); ctx.fillRect(8, -30, 22, 28); ctx.fillRect(-12, 10, 24, 36);
+  ctx.fillStyle = '#d00'; ctx.fillRect(-22, -20, 6, 6); ctx.fillRect(16, -20, 6, 6);
+  ctx.restore();
+}
+let last = performance.now(), uiT = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (!world) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, VW, VH); return; }
+  if (local) { const i = readInput(); useQ = false; step(world, local, dt, { [me]: i }); onEvents(local.ev); syncLocal(); }
+  const k = 1 - Math.exp(-dt * 18);
+  for (const p of Object.values(view.players)) { if (p.tx !== undefined) { p.x += (p.tx - p.x) * k; p.y += (p.ty - p.y) * k; } }
+  if (view.m.tx !== undefined) { view.m.x += (view.m.tx - view.m.x) * k; view.m.y += (view.m.ty - view.m.y) * k; }
+  scare.t -= dt; caught -= dt;
+  const mp = view.players[me]; if (!mp) return;
+  const cx = Math.round(mp.x - VW / 2), cy = Math.round(mp.y - VH / 2), time = now / 1000;
+
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, VW, VH);
+  for (let ty = Math.floor(cy / T); ty <= Math.floor((cy + VH) / T); ty++) for (let tx = Math.floor(cx / T); tx <= Math.floor((cx + VW) / T); tx++)
+    if (tx >= 0 && ty >= 0 && tx < W && ty < H) drawTile(world.tiles[ty * W + tx], tx, ty, tx * T - cx, ty * T - cy, time);
+  world.pickups.forEach((pk, n) => { if (!view.k[n]) return; const y = pk.y - cy + Math.sin(time * 3 + n) * 1.5; ctx.fillStyle = COL[pk.type]; const x = pk.x - cx; ctx.fillRect(x - 1, y - 4, 3, 9); ctx.fillRect(x - 4, y - 1, 9, 3); });
+  // monster (only visible where light reaches, since darkness is drawn on top)
+  const mx = view.m.x - cx, my = view.m.y - cy;
+  ctx.fillStyle = '#05050a'; ctx.fillRect(mx - 5, my - 13, 10, 22); ctx.fillRect(mx - 9, my - 6, 18, 4); ctx.fillStyle = '#f22'; ctx.fillRect(mx - 3, my - 10, 2, 2); ctx.fillRect(mx + 1, my - 10, 2, 2);
+  for (const p of Object.values(view.players)) {
+    if (p.dead) continue; const x = p.x - cx, y = p.y - cy;
+    ctx.fillStyle = p.id === me ? '#d9b36c' : '#6cb3d9'; ctx.fillRect(x - 4, y - 6, 8, 10); ctx.fillStyle = '#e8cfa8'; ctx.fillRect(x - 3, y - 10, 6, 5);
+    ctx.fillStyle = '#fff'; ctx.fillRect(Math.round(x + Math.cos(p.aim) * 6) - 1, Math.round(y + Math.sin(p.aim) * 6) - 1, 2, 2);
+    if (p.fx) { ctx.fillStyle = '#ffd84f66'; ctx.fillRect(x - 6, y + 4, 12, 2); }
+  }
+  // darkness + flashlights
+  dctx.globalCompositeOperation = 'source-over'; dctx.fillStyle = 'rgba(0,0,6,0.965)'; dctx.fillRect(0, 0, VW, VH);
+  dctx.globalCompositeOperation = 'destination-out';
+  const md = Math.hypot(view.m.x - mp.x, view.m.y - mp.y), flick = md < 90 && Math.random() < 0.25 ? 0.4 : 1;
+  for (const p of Object.values(view.players)) {
+    if (p.dead) continue; const x = p.x - cx, y = p.y - cy;
+    let g = dctx.createRadialGradient(x, y, 2, x, y, 20); g.addColorStop(0, 'rgba(0,0,0,.55)'); g.addColorStop(1, 'rgba(0,0,0,0)'); dctx.fillStyle = g; dctx.beginPath(); dctx.arc(x, y, 20, 0, 7); dctx.fill();
+    g = dctx.createRadialGradient(x, y, 4, x, y, 120); g.addColorStop(0, `rgba(0,0,0,${flick})`); g.addColorStop(1, 'rgba(0,0,0,0)'); dctx.fillStyle = g;
+    dctx.beginPath(); dctx.moveTo(x, y); dctx.arc(x, y, 120, p.aim - 0.42, p.aim + 0.42); dctx.closePath(); dctx.fill();
+  }
+  ctx.drawImage(dk, 0, 0);
+  if (caught > 0) { ctx.fillStyle = `rgba(0,0,0,${Math.min(1, caught)})`; ctx.fillRect(0, 0, VW, VH); }
+  drawScare();
+  // heartbeat
+  hbT -= dt; if (md < 170 && hbT <= 0) { thump(0.3 + (1 - md / 170) * 0.5); setTimeout(() => thump(0.2), 150); hbT = 0.35 + md / 170 * 1.2; }
+  // HUD
+  uiT -= dt; if (uiT <= 0) {
+    uiT = 0.2; const n = Object.keys(view.players).length;
+    $('hud').textContent = (room ? `ROOM ${room}  ·  ${n} player${n > 1 ? 's' : ''}` : 'SINGLE PLAYER') + (mp.dead ? '  ·  YOU WERE TAKEN…' : '');
+    $('use').textContent = mp.item ? mp.item.toUpperCase() : '—'; $('use').classList.toggle('on', !!mp.item);
+  }
+}
+requestAnimationFrame(frame);

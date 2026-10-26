@@ -6,26 +6,31 @@
 <style>
 *{box-sizing:border-box;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
 html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:monospace;color:#bbb;touch-action:none}
-canvas{position:fixed;inset:0;width:100%;height:100%;image-rendering:pixelated}
+canvas#c{position:fixed;inset:0;width:100%;height:100%;image-rendering:pixelated}
 .stick{position:fixed;bottom:max(24px,env(safe-area-inset-bottom));width:140px;height:140px;border-radius:50%;border:2px solid #fff3;background:#ffffff0d;touch-action:none}
 .stick i{position:absolute;left:50%;top:50%;width:56px;height:56px;border-radius:50%;background:#fff4;transform:translate(-50%,-50%)}
 #L{left:24px}#R{right:24px}
 #use{position:fixed;right:40px;bottom:190px;width:84px;height:84px;border-radius:50%;border:2px solid #fff5;background:#0008;color:#fff;font:bold 13px monospace;touch-action:none}
 #use.on{border-color:#4fd1ff;box-shadow:0 0 16px #4fd1ff88}
 #hud{position:fixed;top:10px;left:12px;font-size:13px;text-shadow:0 0 4px #000;pointer-events:none}
+#mm{position:fixed;top:10px;right:10px;width:110px;height:110px;border:2px solid #fff4;background:#000a;image-rendering:pixelated;z-index:5;touch-action:none}
+#mm.big{top:50%;right:auto;left:50%;transform:translate(-50%,-50%);width:min(78vh,90vw);height:min(78vh,90vw);background:#000d}
 #menu{position:fixed;inset:0;background:#000d;display:flex;flex-direction:column;gap:12px;align-items:center;justify-content:center;z-index:9}
-#menu h1{color:#a22;letter-spacing:6px;margin:0 0 8px}
+#menu h1{color:#a22;letter-spacing:6px;margin:0 0 4px}
+#menu p{margin:0 0 6px;font-size:12px;color:#888;text-align:center;max-width:260px}
 #menu button,#menu input{font:16px monospace;padding:12px 18px;background:#111;color:#ddd;border:1px solid #555;width:240px;text-align:center;user-select:text;-webkit-user-select:text}
 #menu button:active{background:#400}
 #msg{color:#c55;min-height:18px}
 </style></head><body>
 <canvas id="c"></canvas>
+<canvas id="mm"></canvas>
 <div id="hud"></div>
 <div class="stick" id="L"><i></i></div>
 <div class="stick" id="R"><i></i></div>
 <button id="use">POWER</button>
 <div id="menu">
   <h1>HOLLOW MIRE</h1>
+  <p>Follow the roads. Lamps are safe light. Your flashlight reveals the creature. Tap the map to enlarge it.</p>
   <input id="name" placeholder="your name" maxlength="12">
   <button id="solo">Single player</button>
   <button id="create">Create room</button>
@@ -53,24 +58,35 @@ function Stick(el) {
 }
 const SL = Stick($('L')), SR = Stick($('R'));
 const keys = {}; let mouse = null, useQ = false;
-addEventListener('keydown', (e) => { keys[e.code] = 1; if (e.code === 'Space' || e.code === 'KeyE') useQ = true; });
+addEventListener('keydown', (e) => { keys[e.code] = 1; if (e.code === 'Space' || e.code === 'KeyE') useQ = true; if (e.code === 'KeyM') $('mm').classList.toggle('big'); });
 addEventListener('keyup', (e) => { keys[e.code] = 0; });
-addEventListener('mousemove', (e) => { mouse = { x: e.clientX - innerWidth / 2, y: e.clientY - innerHeight / 2 }; });
+addEventListener('pointermove', (e) => { if (e.pointerType === 'mouse') mouse = { x: e.clientX - innerWidth / 2, y: e.clientY - innerHeight / 2 }; });
 $('use').addEventListener('pointerdown', (e) => { e.preventDefault(); useQ = true; });
+$('mm').addEventListener('pointerdown', (e) => { e.preventDefault(); $('mm').classList.toggle('big'); });
 function readInput() {
   let mx = SL.x, my = SL.y;
   if (keys.KeyA || keys.ArrowLeft) mx -= 1; if (keys.KeyD || keys.ArrowRight) mx += 1;
   if (keys.KeyW || keys.ArrowUp) my -= 1; if (keys.KeyS || keys.ArrowDown) my += 1;
   let ax = SR.x, ay = SR.y;
-  if (Math.hypot(ax, ay) < 0.2 && mouse) { const l = Math.hypot(mouse.x, mouse.y) || 1; ax = mouse.x / l; ay = mouse.y / l; }
+  if (Math.hypot(ax, ay) < 0.2) {
+    if (mouse) { const l = Math.hypot(mouse.x, mouse.y) || 1; ax = mouse.x / l; ay = mouse.y / l; }
+    else if (Math.hypot(mx, my) > 0.3) { ax = mx; ay = my; } // flashlight follows movement when right stick idle
+  }
   return { mx, my, ax, ay, u: useQ };
 }
 
 // ---------- audio ----------
-let ac, hbT = 0;
-function audio() { if (ac) return; const AC = window.AudioContext || window.webkitAudioContext; ac = new AC(); ac.resume(); const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = 42; g.gain.value = 0.05; o.connect(g).connect(ac.destination); o.start(); }
+let ac, hbT = 0, growlT = 20;
+function audio() {
+  if (ac) return; const AC = window.AudioContext || window.webkitAudioContext; ac = new AC(); ac.resume();
+  const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = 42; g.gain.value = 0.04; o.connect(g).connect(ac.destination); o.start();
+  const n = ac.sampleRate * 2, b = ac.createBuffer(1, n, ac.sampleRate), d = b.getChannelData(0); let l = 0;
+  for (let i = 0; i < n; i++) { l = (l + 0.02 * (Math.random() * 2 - 1)) / 1.02; d[i] = l * 3.5; }
+  const s = ac.createBufferSource(), f = ac.createBiquadFilter(), wg = ac.createGain(); s.buffer = b; s.loop = true; f.type = 'lowpass'; f.frequency.value = 500; wg.gain.value = 0.35;
+  s.connect(f).connect(wg).connect(ac.destination); s.start();
+}
 function noise(dur, vol, f0, f1) {
-  if (!ac) return; const n = ac.sampleRate * dur, b = ac.createBuffer(1, n, ac.sampleRate), d = b.getChannelData(0);
+  if (!ac) return; const n = Math.floor(ac.sampleRate * dur), b = ac.createBuffer(1, n, ac.sampleRate), d = b.getChannelData(0);
   for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
   const s = ac.createBufferSource(), g = ac.createGain(), f = ac.createBiquadFilter(); s.buffer = b; f.type = 'bandpass';
   f.frequency.setValueAtTime(f0, ac.currentTime); f.frequency.exponentialRampToValueAtTime(f1, ac.currentTime + dur);
@@ -80,8 +96,9 @@ const thump = (v) => { if (!ac) return; const o = ac.createOscillator(), g = ac.
 
 // ---------- game state ----------
 let world, local = null, ws = null, me = null, room = '';
-const view = { players: {}, m: { x: 0, y: 0 }, k: [] };
-let scare = { t: 0, big: 0 }, caught = 0;
+const view = { players: {}, m: { x: 0, y: 0, vis: 0 }, k: [] };
+let scare = { t: 0, big: 0, max: 1 }, caught = 0;
+let seen = null, mapDirty = true, mapBuilt = 0, mmT = 0;
 
 function onEvents(evs) {
   for (const e of evs) {
@@ -102,9 +119,10 @@ function syncLocal() {
   for (const p of Object.values(s.players)) setPlayer(p.id, p.x, p.y, p.aim, p.item, p.dead > 0, p.speedT > 0, p.name, true);
   view.m.x = s.m.x; view.m.y = s.m.y; view.k = s.pk.map((k) => k.on);
 }
+function initWorld(w) { world = w; seen = new Uint8Array(W * H); mapDirty = true; view.m.vis = 0; }
 
 function startSolo() {
-  world = createWorld((Math.random() * 2 ** 31) | 0); local = newState(world); me = 'me'; room = '';
+  initWorld(createWorld((Math.random() * 2 ** 31) | 0)); local = newState(world); me = 'me'; room = '';
   addPlayer(local, world, me, $('name').value || 'You'); $('menu').style.display = 'none'; audio();
 }
 function startOnline(code) {
@@ -112,7 +130,7 @@ function startOnline(code) {
   const sock = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/${room}?name=${encodeURIComponent($('name').value || 'Player')}`);
   sock.onmessage = (e) => {
     const m = JSON.parse(e.data);
-    if (m.t === 'welcome') { me = m.id; world = createWorld(m.seed); ws = sock; $('menu').style.display = 'none'; }
+    if (m.t === 'welcome') { me = m.id; initWorld(createWorld(m.seed)); ws = sock; $('menu').style.display = 'none'; }
     else if (m.t === 's') {
       const ids = new Set();
       for (const [id, x, y, aim, item, dead, fx, name] of m.p) { ids.add(id); setPlayer(id, x, y, aim, item, !!dead, !!fx, name, !view.players[id]); }
@@ -121,84 +139,110 @@ function startOnline(code) {
       view.k = m.k.map(Boolean); onEvents(m.e);
     }
   };
-  sock.onclose = () => { ws = null; world = null; $('menu').style.display = 'flex'; $('msg').textContent = 'Disconnected or room full.'; };
+  sock.onclose = () => { ws = null; world = null; local = null; $('menu').style.display = 'flex'; $('msg').textContent = 'Disconnected or room full.'; };
 }
 $('solo').onclick = startSolo;
 $('create').onclick = async () => { const { code } = await (await fetch('/api/new')).json(); startOnline(code); };
 $('join').onclick = () => { const c = $('code').value.trim(); if (c) startOnline(c); };
 setInterval(() => { if (ws && ws.readyState === 1) { const i = readInput(); ws.send(JSON.stringify({ t: 'in', ...i })); useQ = false; } }, 50);
 
+// ---------- minimap ----------
+const mm = $('mm'), mctx = mm.getContext('2d'); mm.width = W; mm.height = H;
+const mapc = document.createElement('canvas'); mapc.width = W; mapc.height = H; const mapx = mapc.getContext('2d');
+const MC = { 0: [40, 78, 44], 1: [16, 48, 26], 2: [28, 74, 120], 3: [110, 92, 68], 4: [170, 170, 185], 5: [220, 150, 40], 6: [190, 165, 105], 7: [150, 112, 60], 8: [90, 66, 40] };
+const KNOWN = { 3: 1, 4: 1, 5: 1, 6: 1, 7: 1, 8: 1 };
+function reveal(px, py) {
+  const cx = (px / T) | 0, cy = (py / T) | 0, R = 13;
+  for (let y = cy - R; y <= cy + R; y++) for (let x = cx - R; x <= cx + R; x++) {
+    if (x < 0 || y < 0 || x >= W || y >= H || (x - cx) ** 2 + (y - cy) ** 2 > R * R) continue;
+    const i = y * W + x; if (!seen[i]) { seen[i] = 1; mapDirty = true; }
+  }
+}
+function drawMap(now, time) {
+  if (mapDirty && now - mapBuilt > 250) {
+    const id = mapx.createImageData(W, H), d = id.data;
+    for (let i = 0; i < W * H; i++) { const t = world.tiles[i]; if (seen[i] || KNOWN[t]) { const c = MC[t]; d[i * 4] = c[0]; d[i * 4 + 1] = c[1]; d[i * 4 + 2] = c[2]; d[i * 4 + 3] = 255; } }
+    mapx.putImageData(id, 0, 0); mapDirty = false; mapBuilt = now;
+  }
+  mctx.clearRect(0, 0, W, H); mctx.drawImage(mapc, 0, 0);
+  mctx.fillStyle = '#4fd1ff'; mctx.fillRect(world.spawn.x / T - 3, world.spawn.y / T - 3, 6, 6);
+  for (const p of Object.values(view.players)) {
+    if (p.dead) continue;
+    mctx.fillStyle = p.id === me ? (((time * 3) | 0) % 2 ? '#fff' : '#f55') : '#6cb3d9';
+    mctx.fillRect(p.x / T - 2, p.y / T - 2, 5, 5);
+  }
+}
+
 // ---------- rendering ----------
 const COL = { dash: '#4fd1ff', speed: '#ffd84f' };
 function drawTile(t, tx, ty, sx, sy, time) {
   const h = hash(tx, ty, 5);
-  ctx.fillStyle = h < 0.15 ? '#1f4022' : '#17301a';
-  if (t === 0 || t === 1) { ctx.fillRect(sx, sy, T, T); }
-  if (t === 1) { ctx.fillStyle = '#2b1d12'; ctx.fillRect(sx + 6, sy + 9, 4, 7); ctx.fillStyle = '#0c2410'; ctx.fillRect(sx + 1, sy, 14, 11); ctx.fillStyle = '#143a1c'; ctx.fillRect(sx + 3, sy + 2, 7, 4); }
-  else if (t === 2) { ctx.fillStyle = '#0e2238'; ctx.fillRect(sx, sy, T, T); if (((h * 100 + time * 2) | 0) % 9 === 0) { ctx.fillStyle = '#1b3d5e'; ctx.fillRect(sx + 3, sy + 7, 8, 1); } }
-  else if (t === 3) { ctx.fillStyle = '#3b2e22'; ctx.fillRect(sx, sy, T, T); ctx.fillStyle = '#31251a'; ctx.fillRect(sx, sy + 7, T, 1); }
-  else if (t === 4) { ctx.fillStyle = '#22222b'; ctx.fillRect(sx, sy, T, T); ctx.fillStyle = '#3a3a48'; ctx.fillRect(sx, sy, T, 3); }
-  else if (t === 5) { ctx.fillStyle = '#6b4a2a'; ctx.fillRect(sx, sy, T, T); ctx.fillStyle = '#3b2814'; ctx.fillRect(sx + 2, sy + 2, 12, 12); }
+  if (t === 0 || t === 1) {
+    ctx.fillStyle = h < 0.33 ? '#2a5a2f' : h < 0.66 ? '#2f6334' : '#356a38'; ctx.fillRect(sx, sy, T, T);
+    if (h > 0.8) { ctx.fillStyle = '#4a8a4a'; ctx.fillRect(sx + ((h * 97) % 11 | 0) + 2, sy + ((h * 53) % 9 | 0) + 3, 1, 3); ctx.fillRect(sx + ((h * 61) % 9 | 0) + 4, sy + ((h * 29) % 7 | 0) + 6, 1, 2); }
+    if (t === 1) {
+      const o = (h * 4) | 0;
+      ctx.fillStyle = '#00000044'; ctx.fillRect(sx + 1, sy + 11, 14, 4);
+      ctx.fillStyle = '#4a2f1a'; ctx.fillRect(sx + 6, sy + 9, 4, 7);
+      ctx.fillStyle = '#164a24'; ctx.fillRect(sx + 1, sy - 3, 14, 14); ctx.fillRect(sx - 1, sy, 18, 8);
+      ctx.fillStyle = '#1f6a32'; ctx.fillRect(sx + 3, sy - 2, 10, 8);
+      ctx.fillStyle = '#2e8a44'; ctx.fillRect(sx + 4 + o, sy - 1, 3, 2); ctx.fillRect(sx + 8, sy + 3, 2, 2);
+    }
+  } else if (t === 2) {
+    ctx.fillStyle = '#1e4a78'; ctx.fillRect(sx, sy, T, T);
+    if (((h * 60 + time * 1.5) | 0) % 7 === 0) { ctx.fillStyle = '#3a7ab0'; ctx.fillRect(sx + 2, sy + ((h * 12) | 0), 6, 1); }
+    if (h > 0.9) { ctx.fillStyle = '#2a5a90'; ctx.fillRect(sx + 8, sy + 10, 5, 1); }
+  } else if (t === 3 || t === 8) {
+    ctx.fillStyle = '#6a5640'; ctx.fillRect(sx, sy, T, T);
+    ctx.fillStyle = '#5a4936'; ctx.fillRect(sx, sy + 5, T, 1); ctx.fillRect(sx, sy + 11, T, 1);
+    ctx.fillStyle = '#7a6650'; ctx.fillRect(sx + ((h * 13) | 0), sy + 2, 3, 1);
+    if (t === 8) { ctx.fillStyle = '#5a3a18'; ctx.fillRect(sx + 1, sy + 1, 14, 14); ctx.fillStyle = '#9a6a30'; ctx.fillRect(sx + 2, sy + 2, 12, 12); ctx.fillStyle = '#7a5020'; ctx.fillRect(sx + 2, sy + 7, 12, 2); ctx.fillRect(sx + 7, sy + 2, 2, 12); }
+  } else if (t === 4) {
+    ctx.fillStyle = '#4a4a5a'; ctx.fillRect(sx, sy, T, T);
+    ctx.fillStyle = '#6a6a7e'; ctx.fillRect(sx, sy, T, 5);
+    ctx.fillStyle = '#3a3a48'; ctx.fillRect(sx, sy + 8, T, 1); ctx.fillRect(sx + 5 + (ty % 2) * 4, sy + 5, 1, 3);
+    ctx.fillStyle = '#2a2a36'; ctx.fillRect(sx, sy + 14, T, 2);
+  } else if (t === 5) {
+    ctx.fillStyle = '#5a3a1a'; ctx.fillRect(sx, sy, T, T); ctx.fillStyle = '#8a5a2a'; ctx.fillRect(sx + 2, sy + 1, 12, 15);
+    ctx.fillStyle = '#6a4220'; ctx.fillRect(sx + 7, sy + 1, 2, 15); ctx.fillStyle = '#e8c050'; ctx.fillRect(sx + 11, sy + 8, 2, 2);
+  } else if (t === 6) {
+    ctx.fillStyle = '#8a7650'; ctx.fillRect(sx, sy, T, T);
+    if (h < 0.35) { ctx.fillStyle = '#9a8660'; ctx.fillRect(sx + ((h * 40) | 0), sy + ((h * 90) % 12 | 0), 3, 2); }
+    if (h > 0.9) { ctx.fillStyle = '#6a5a3a'; ctx.fillRect(sx + 4, sy + 9, 2, 2); }
+  } else if (t === 7) {
+    ctx.fillStyle = '#1e4a78'; ctx.fillRect(sx, sy, T, T);
+    ctx.fillStyle = '#7a5a30'; ctx.fillRect(sx, sy, T, T - 1); ctx.fillStyle = '#5a4020';
+    ctx.fillRect(sx, sy + 3, T, 1); ctx.fillRect(sx, sy + 7, T, 1); ctx.fillRect(sx, sy + 11, T, 1); ctx.fillRect(sx, sy + 15, T, 1);
+  }
+}
+function drawPlayer(p, x, y, isMe) {
+  const bob = p.mv ? Math.abs(Math.sin(p.bob || 0)) * 1.5 : 0, st = p.mv ? Math.sin(p.bob || 0) * 2 : 0;
+  ctx.fillStyle = '#00000066'; ctx.fillRect(x - 4, y + 4, 9, 3);
+  ctx.fillStyle = '#2a2a3a'; ctx.fillRect(x - 3, y + 1 + st * 0.5, 2, 4); ctx.fillRect(x + 1, y + 1 - st * 0.5, 2, 4);
+  y -= bob;
+  ctx.fillStyle = isMe ? '#d9a63c' : '#4c8fc9'; ctx.fillRect(x - 4, y - 6, 8, 8);
+  ctx.fillStyle = isMe ? '#b07a20' : '#356a9a'; ctx.fillRect(x - 4, y, 8, 2);
+  ctx.fillStyle = '#e8cfa8'; ctx.fillRect(x - 3, y - 11, 6, 5);
+  ctx.fillStyle = '#3a2a1a'; ctx.fillRect(x - 3, y - 12, 6, 2);
+  const fx = x + Math.cos(p.aim) * 6, fy = y - 2 + Math.sin(p.aim) * 6;
+  ctx.fillStyle = '#888'; ctx.fillRect(Math.round(fx) - 1, Math.round(fy) - 1, 3, 3);
+  ctx.fillStyle = '#fff6b0'; ctx.fillRect(Math.round(x + Math.cos(p.aim) * 8), Math.round(y - 2 + Math.sin(p.aim) * 8), 2, 2);
+  if (p.fx) { ctx.fillStyle = '#ffd84f66'; ctx.fillRect(x - 7, y + 5, 14, 2); }
+}
+function drawMonster(x, y, time, a) {
+  ctx.save(); ctx.globalAlpha = a; const j = Math.sin(time * 14);
+  ctx.fillStyle = '#00000099'; ctx.fillRect(x - 8, y + 9, 16, 3);
+  ctx.fillStyle = '#1a1a26'; ctx.fillRect(x - 4, y - 14, 8, 20); ctx.fillRect(x - 3, y - 21, 6, 8);
+  ctx.fillRect(x - 10, y - 12 + j, 3, 17); ctx.fillRect(x + 7, y - 12 - j, 3, 17);
+  ctx.fillRect(x - 4, y + 6, 3, 6); ctx.fillRect(x + 1, y + 6, 3, 6);
+  ctx.fillStyle = '#4a4a66'; ctx.fillRect(x - 4, y - 14, 1, 20); ctx.fillRect(x - 10, y - 12 + j, 1, 17); ctx.fillRect(x + 9, y - 12 - j, 1, 17);
+  ctx.fillStyle = '#c8c4b0'; ctx.fillRect(x - 10, y + 5 + j, 3, 2); ctx.fillRect(x + 7, y + 5 - j, 3, 2);
+  ctx.fillStyle = '#ff2020'; ctx.fillRect(x - 3, y - 19, 2, 2); ctx.fillRect(x + 1, y - 19, 2, 2);
+  ctx.restore();
 }
 function drawScare() {
   if (scare.t <= 0) return;
   const k = scare.t / scare.max, sh = scare.big ? 6 : 2;
   ctx.fillStyle = `rgba(160,0,0,${0.5 * k})`; ctx.fillRect(0, 0, VW, VH);
   if (!scare.big) return;
-  const cx = VW / 2 + (Math.random() - 0.5) * sh, cy = VH / 2 + (Math.random() - 0.5) * sh, s = 1 + (1 - k) * 0.6;
-  ctx.save(); ctx.translate(cx, cy); ctx.scale(s, s);
-  ctx.fillStyle = '#d8d2c0'; ctx.fillRect(-40, -55, 80, 110); ctx.fillStyle = '#000';
-  ctx.fillRect(-30, -30, 22, 28); ctx.fillRect(8, -30, 22, 28); ctx.fillRect(-12, 10, 24, 36);
-  ctx.fillStyle = '#d00'; ctx.fillRect(-22, -20, 6, 6); ctx.fillRect(16, -20, 6, 6);
-  ctx.restore();
-}
-let last = performance.now(), uiT = 0;
-function frame(now) {
-  requestAnimationFrame(frame);
-  const dt = Math.min(0.05, (now - last) / 1000); last = now;
-  if (!world) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, VW, VH); return; }
-  if (local) { const i = readInput(); useQ = false; step(world, local, dt, { [me]: i }); onEvents(local.ev); syncLocal(); }
-  const k = 1 - Math.exp(-dt * 18);
-  for (const p of Object.values(view.players)) { if (p.tx !== undefined) { p.x += (p.tx - p.x) * k; p.y += (p.ty - p.y) * k; } }
-  if (view.m.tx !== undefined) { view.m.x += (view.m.tx - view.m.x) * k; view.m.y += (view.m.ty - view.m.y) * k; }
-  scare.t -= dt; caught -= dt;
-  const mp = view.players[me]; if (!mp) return;
-  const cx = Math.round(mp.x - VW / 2), cy = Math.round(mp.y - VH / 2), time = now / 1000;
-
-  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, VW, VH);
-  for (let ty = Math.floor(cy / T); ty <= Math.floor((cy + VH) / T); ty++) for (let tx = Math.floor(cx / T); tx <= Math.floor((cx + VW) / T); tx++)
-    if (tx >= 0 && ty >= 0 && tx < W && ty < H) drawTile(world.tiles[ty * W + tx], tx, ty, tx * T - cx, ty * T - cy, time);
-  world.pickups.forEach((pk, n) => { if (!view.k[n]) return; const y = pk.y - cy + Math.sin(time * 3 + n) * 1.5; ctx.fillStyle = COL[pk.type]; const x = pk.x - cx; ctx.fillRect(x - 1, y - 4, 3, 9); ctx.fillRect(x - 4, y - 1, 9, 3); });
-  // monster (only visible where light reaches, since darkness is drawn on top)
-  const mx = view.m.x - cx, my = view.m.y - cy;
-  ctx.fillStyle = '#05050a'; ctx.fillRect(mx - 5, my - 13, 10, 22); ctx.fillRect(mx - 9, my - 6, 18, 4); ctx.fillStyle = '#f22'; ctx.fillRect(mx - 3, my - 10, 2, 2); ctx.fillRect(mx + 1, my - 10, 2, 2);
-  for (const p of Object.values(view.players)) {
-    if (p.dead) continue; const x = p.x - cx, y = p.y - cy;
-    ctx.fillStyle = p.id === me ? '#d9b36c' : '#6cb3d9'; ctx.fillRect(x - 4, y - 6, 8, 10); ctx.fillStyle = '#e8cfa8'; ctx.fillRect(x - 3, y - 10, 6, 5);
-    ctx.fillStyle = '#fff'; ctx.fillRect(Math.round(x + Math.cos(p.aim) * 6) - 1, Math.round(y + Math.sin(p.aim) * 6) - 1, 2, 2);
-    if (p.fx) { ctx.fillStyle = '#ffd84f66'; ctx.fillRect(x - 6, y + 4, 12, 2); }
-  }
-  // darkness + flashlights
-  dctx.globalCompositeOperation = 'source-over'; dctx.fillStyle = 'rgba(0,0,6,0.965)'; dctx.fillRect(0, 0, VW, VH);
-  dctx.globalCompositeOperation = 'destination-out';
-  const md = Math.hypot(view.m.x - mp.x, view.m.y - mp.y), flick = md < 90 && Math.random() < 0.25 ? 0.4 : 1;
-  for (const p of Object.values(view.players)) {
-    if (p.dead) continue; const x = p.x - cx, y = p.y - cy;
-    let g = dctx.createRadialGradient(x, y, 2, x, y, 20); g.addColorStop(0, 'rgba(0,0,0,.55)'); g.addColorStop(1, 'rgba(0,0,0,0)'); dctx.fillStyle = g; dctx.beginPath(); dctx.arc(x, y, 20, 0, 7); dctx.fill();
-    g = dctx.createRadialGradient(x, y, 4, x, y, 120); g.addColorStop(0, `rgba(0,0,0,${flick})`); g.addColorStop(1, 'rgba(0,0,0,0)'); dctx.fillStyle = g;
-    dctx.beginPath(); dctx.moveTo(x, y); dctx.arc(x, y, 120, p.aim - 0.42, p.aim + 0.42); dctx.closePath(); dctx.fill();
-  }
-  ctx.drawImage(dk, 0, 0);
-  if (caught > 0) { ctx.fillStyle = `rgba(0,0,0,${Math.min(1, caught)})`; ctx.fillRect(0, 0, VW, VH); }
-  drawScare();
-  // heartbeat
-  hbT -= dt; if (md < 170 && hbT <= 0) { thump(0.3 + (1 - md / 170) * 0.5); setTimeout(() => thump(0.2), 150); hbT = 0.35 + md / 170 * 1.2; }
-  // HUD
-  uiT -= dt; if (uiT <= 0) {
-    uiT = 0.2; const n = Object.keys(view.players).length;
-    $('hud').textContent = (room ? `ROOM ${room}  ·  ${n} player${n > 1 ? 's' : ''}` : 'SINGLE PLAYER') + (mp.dead ? '  ·  YOU WERE TAKEN…' : '');
-    $('use').textContent = mp.item ? mp.item.toUpperCase() : '—'; $('use').classList.toggle('on', !!mp.item);
-  }
-}
-requestAnimationFrame(frame);
-  </script></body></html>
+  const cx = VW / 2 + (Math.random() - 0.5)

@@ -26,7 +26,7 @@ export class GameRoom {
     server.addEventListener('message', (e) => {
       try {
         const m = JSON.parse(e.data);
-        if (m.t === 'in') this.inputs[id] = { mx: +m.mx || 0, my: +m.my || 0, ax: +m.ax || 0, ay: +m.ay || 0, u: !!m.u };
+        if (m.t === 'in') this.inputs[id] = { mx: +m.mx || 0, my: +m.my || 0, ax: +m.ax || 0, ay: +m.ay || 0, u: !!m.u, a: !!m.a };
       } catch {}
     });
     const leave = () => {
